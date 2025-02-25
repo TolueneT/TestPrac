@@ -136,3 +136,199 @@ variable "eks_policy_file" {
   type        = string
 }
 ```
+
+# modules/iam/outputs.tf
+
+```sh
+output "eks_cluster_role_arn" {
+  description = "ARN of the created IAM role for EKS"
+  value       = aws_iam_role.eks_cluster.arn
+}
+```
+
+# modules/eks/main.tf
+
+```sh
+module "networking" {
+  source = "../networking"
+  vpc_cidr             = var.vpc_cidr
+  vpc_name             = var.vpc_name
+  public_subnet_cidrs  = var.public_subnet_cidrs
+  availability_zones   = var.availability_zones
+}
+
+module "iam" {
+  source                  = "../iam"
+  eks_cluster_role_name   = var.eks_cluster_role_name
+  eks_cluster_policy_name = var.eks_cluster_policy_name
+  eks_policy_file         = var.eks_policy_file
+}
+
+resource "aws_eks_cluster" "this" {
+  name     = var.cluster_name
+  role_arn = module.iam.eks_cluster_role_arn
+
+  vpc_config {
+    subnet_ids = module.networking.public_subnet_ids
+  }
+
+  depends_on = [module.iam, module.networking]
+}
+```
+
+# modules/eks/variables.tf
+
+```sh
+variable "cluster_name" {
+  description = "Name of the EKS cluster"
+  type        = string
+}
+
+# Variables for the Networking module
+variable "vpc_cidr" {
+  description = "CIDR block for the VPC"
+  type        = string
+}
+
+variable "vpc_name" {
+  description = "Name tag for the VPC"
+  type        = string
+}
+
+variable "public_subnet_cidrs" {
+  description = "List of CIDR blocks for public subnets"
+  type        = list(string)
+}
+
+variable "availability_zones" {
+  description = "List of availability zones for subnets"
+  type        = list(string)
+}
+
+# Variables for the IAM module
+variable "eks_cluster_role_name" {
+  description = "Name for the IAM role for EKS"
+  type        = string
+}
+
+variable "eks_cluster_policy_name" {
+  description = "Name for the IAM policy for EKS"
+  type        = string
+}
+
+variable "eks_policy_file" {
+  description = "Path to the IAM policy JSON file"
+  type        = string
+}
+```
+
+# modules/eks/outputs.tf
+
+```sh
+output "eks_cluster_id" {
+  description = "ID of the created EKS cluster"
+  value       = aws_eks_cluster.this.id
+}
+
+output "eks_cluster_endpoint" {
+  description = "Endpoint URL of the created EKS cluster"
+  value       = aws_eks_cluster.this.endpoint
+}
+```
+
+# **Root Module Configuration**
+
+## main.tf
+
+```sh
+module "eks" {
+  source = "./modules/eks"
+
+  # EKS module variables
+  cluster_name = "my-eks-cluster"
+
+  # Networking variables
+  vpc_cidr            = "10.0.0.0/16"
+  vpc_name            = "my-vpc"
+  public_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"]
+  availability_zones  = ["us-east-1a", "us-east-1b"]      #
+
+  # IAM variables
+  eks_cluster_role_name   = "my-eks-role"
+  eks_cluster_policy_name = "my-eks-policy"
+  eks_policy_file         = "path/to/eks-policy.json"  # # Replace with the actual path to your policy JSON file
+}
+```
+
+## outputs.tf
+
+```sh
+output "eks_cluster_endpoint" {
+  description = "The endpoint of the deployed EKS cluster"
+  value       = module.eks.eks_cluster_endpoint
+}
+```
+
+## backend.tf
+
+```sh
+terraform {
+  backend "s3" {
+    bucket         = "my-terraform-state-bucket"
+    key            = "eks/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "terraform-lock-table"
+    encrypt        = true
+  }
+}
+```
+
+# GitHub Actions Workflow
+
+## .github/workflows/deploy.yml
+
+```yaml
+name: Terraform Deployment
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.4.0
+
+      - name: Terraform Format
+        run: terraform fmt -check
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        if: github.event_name == 'push'
+        run: |
+          echo "Manual approval should be incorporated here if needed"
+          # # You can integrate a manual approval step using GitHub Environments or an approval job
+          terraform apply -auto-approve tfplan
+```
